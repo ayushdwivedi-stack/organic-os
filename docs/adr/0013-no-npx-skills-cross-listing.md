@@ -1,8 +1,9 @@
 # ADR-0013: Do not cross-list organic-os skills on the npx skills registry
 
-- Status: proposed
-- Date: 2026-09-15
-- Decision makers: TBD (pending maintainer review)
+- Status: accepted
+- Date: 2026-09-27
+- Decision makers: Shivaa Tripathi (human), Claude (agent); investigation by
+  @ayushdwivedi-stack
 
 ## Context
 
@@ -16,7 +17,7 @@ plugin marketplace (ADR-0001) staying the canonical install path?
 submission, approval, or central index: any public repo with a `SKILL.md`
 (YAML frontmatter - `name`, `description`) at the expected path becomes
 installable via `npx skills add owner/repo --skill <name>`. "Listing" is not
-The Claude plugin marketplace (ADR-0001) remains the sole install path.a distinct action from being a public repo with correctly-shaped skill
+a distinct action from being a public repo with correctly-shaped skill
 files - organic-os's skills already carry this exact frontmatter shape
 (confirmed directly in `plugin/skills/onsite-audit/SKILL.md`), so no
 reformatting or content fork would be required to become installable this
