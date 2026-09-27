@@ -6,7 +6,7 @@ sys.path.insert(0, str(LIB))
 import json  # noqa: E402
 from types import SimpleNamespace  # noqa: E402
 import pytest  # noqa: E402
-from hoo.google_ads import tier, keyword_ideas, historical  # noqa: E402
+from hoo.google_ads import tier, keyword_ideas, historical, gaql  # noqa: E402
 
 
 class FakeIdeaService:
@@ -25,21 +25,44 @@ class FakeIdeaService:
                               "low_top_of_page_bid_micros": 1_000_000,
                               "high_top_of_page_bid_micros": 5_000_000})()
         return [Idea("crm for smb", 1200, 3), Idea("smb crm pricing", 400, 2)]
+class FakeGoogleAdsService:
+    def __init__(self, rows):
+        self.rows = rows
+        self.calls = []
+
+    def search(self, **kwargs):
+        self.calls.append(kwargs)
+        return self.rows
 
 
 class FakeClient:
-    def __init__(self, planner_ok=True, error="PERMISSION_DENIED: planner blocked"):
+    def __init__(
+        self,
+        planner_ok=True,
+        error="PERMISSION_DENIED: planner blocked",
+        gaql_rows=None,
+    ):
         self.planner_ok = planner_ok
         self.error = error
+        self.gaql_service = FakeGoogleAdsService(gaql_rows or [])
+
     def get_service(self, name):
         if name == "KeywordPlanIdeaService":
-            return FakeIdeaService(None if self.planner_ok else self.error)
+            return FakeIdeaService(
+                None if self.planner_ok else self.error
+            )
+        if name == "GoogleAdsService":
+            return self.gaql_service
         raise AssertionError(name)
+
     def get_type(self, name):
-        return SimpleNamespace(customer_id="", language="",
-                               geo_target_constants=[],
-                               keyword_seed=SimpleNamespace(keywords=[]),
-                               site_seed=SimpleNamespace(site=""))
+        return SimpleNamespace(
+            customer_id="",
+            language="",
+            geo_target_constants=[],
+            keyword_seed=SimpleNamespace(keywords=[]),
+            site_seed=SimpleNamespace(site=""),
+        )
 
 
 def test_detect_tier_basic():
@@ -117,3 +140,72 @@ def test_historical_raises_with_partial_after_two_failures(monkeypatch):
                        geo="2356", lang="1000")
     assert "batch 200" in str(ei.value)
     assert len(ei.value.partial) == 200  # batch 1's rows survive
+def test_gaql_run_passes_customer_id_and_query_unchanged():
+    rows = [SimpleNamespace(name="Alice")]
+    client = FakeClient(gaql_rows=rows)
+
+    out = gaql.run(
+        client,
+        "123-456-7890",
+        "SELECT campaign.id FROM campaign",
+    )
+
+    assert client.gaql_service.calls == [
+        {
+            "customer_id": "123-456-7890",
+            "query": "SELECT campaign.id FROM campaign",
+        }
+    ]
+    assert len(out) == 1
+
+
+def test_gaql_run_flattens_rows_in_order(monkeypatch):
+    rows = [
+        SimpleNamespace(id=1),
+        SimpleNamespace(id=2),
+    ]
+    client = FakeClient(gaql_rows=rows)
+
+    flattened = [
+        {"id": 1},
+        {"id": 2},
+    ]
+    calls = []
+
+    def fake_flatten(row):
+        calls.append(row)
+        return flattened[len(calls) - 1]
+
+    monkeypatch.setattr(gaql, "_flatten", fake_flatten)
+
+    assert gaql.run(
+        client,
+        "123",
+        "SELECT id FROM campaign",
+    ) == flattened
+    assert calls == rows
+
+
+def test_gaql_flatten_fallback_returns_raw(monkeypatch):
+    row = SimpleNamespace(_pb=object())
+
+    original_import = __import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "google.protobuf.json_format":
+            raise ImportError("protobuf unavailable")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.__import__", fake_import)
+
+    assert gaql._flatten(row) == {"raw": str(row)}
+
+
+def test_gaql_run_empty_results_returns_empty_list():
+    client = FakeClient(gaql_rows=[])
+
+    assert gaql.run(
+        client,
+        "123",
+        "SELECT id FROM campaign",
+    ) == []
